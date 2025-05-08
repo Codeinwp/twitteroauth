@@ -601,54 +601,6 @@ class TwitterOAuth extends Config
     }
 
     /**
-     * Create oAuth header for request.
-     *
-     * @param string $url
-     * @param string $method
-     * @param string $token
-     * @param string $tokenSecret
-     *
-     * @return string
-     */
-    private function oAuthHeader($url, $method, $token, $tokenSecret) {
-        $url_parts = parse_url($url);
-        $query_params = [];
-        if (!empty($url_parts['query'])) {
-            parse_str($url_parts['query'], $query_params);
-        }
-    
-        $oauth_params = [
-            'oauth_consumer_key'     => $this->consumerKey,
-            'oauth_nonce'            => bin2hex(random_bytes(16)),
-            'oauth_signature_method' => 'HMAC-SHA1',
-            'oauth_timestamp'        => time(),
-            'oauth_token'            => $token,
-            'oauth_version'          => '1.0',
-        ];
-    
-        $signature_params = array_merge($oauth_params, $query_params);
-
-        ksort($signature_params);
-
-        $base_string = strtoupper($method) . '&' .
-                       rawurlencode($url_parts['scheme'] . '://' . $url_parts['host'] . $url_parts['path']) . '&' .
-                       rawurlencode(http_build_query($signature_params, '', '&', PHP_QUERY_RFC3986));
-    
-        // Generate signature
-        $signing_key = rawurlencode($this->consumerSecret) . '&' . rawurlencode($tokenSecret);
-        $signature = base64_encode(hash_hmac('sha1', $base_string, $signing_key, true));
-    
-        $oauth_params['oauth_signature'] = $signature;
-    
-        // Build the Authorization header
-        $header = 'OAuth ' . implode(', ', array_map(function ($k, $v) {
-            return $k . '="' . rawurlencode((string)$v) . '"';
-        }, array_keys($oauth_params), $oauth_params));
-    
-        return $header;
-    }
-
-    /**
      * Format and sign an OAuth / API request
      *
      * @param string $url
@@ -665,6 +617,11 @@ class TwitterOAuth extends Config
         array $parameters,
         array $options = []
     ) {
+        if ( isset( $parameters['command'] ) ) {
+            $media_parameters = $parameters;
+            $parameters = [];
+        }
+
         $request = Request::fromConsumerAndToken(
             $this->consumer,
             $method,
@@ -678,10 +635,25 @@ class TwitterOAuth extends Config
             unset($parameters['oauth_callback']);
         }
         if ($this->bearer === null) {
-            $authorization = 'Authorization: ' . $this->oAuthHeader($url, $method, $this->oauthToken, $this->oauthTokenSecret);
+            $request->signRequest(
+                $this->signatureMethod,
+                $this->consumer,
+                $this->token,
+            );
+            $authorization = $request->toHeader();
+            if (array_key_exists('oauth_verifier', $parameters)) {
+                // Twitter doesn't always work with oauth in the body and in the header
+                // and it's already included in the $authorization header
+                unset($parameters['oauth_verifier']);
+            }
         } else {
             $authorization = 'Authorization: Bearer ' . $this->bearer;
         }
+
+        if ( isset( $media_parameters['command'] ) ) {
+            $parameters = $media_parameters;
+        }
+
         return $this->request(
             $request->getNormalizedHttpUrl(),
             $method,
